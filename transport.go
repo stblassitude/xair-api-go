@@ -171,7 +171,7 @@ func (c *Client) unregister(addr string, ch chan *goosc.Message) {
 // Arguments must already be OSC-wire-typed (int32, float32, or string —
 // WIRE_PROTOCOL.md §6). Booleans are sent as int32 0/1, never as OSC's
 // native True/False types, since that is what these mixers expect.
-func (c *Client) Send(addr string, args ...interface{}) error {
+func (c *Client) Send(addr string, args ...any) error {
 	msg := goosc.NewMessage(addr, args...)
 	data, err := msg.MarshalBinary()
 	if err != nil {
@@ -183,7 +183,7 @@ func (c *Client) Send(addr string, args ...interface{}) error {
 
 // Get sends a GET for addr and waits for the mixer's reply to that exact
 // address, or until ctx is done. It returns the reply's argument list.
-func (c *Client) Get(ctx context.Context, addr string) ([]interface{}, error) {
+func (c *Client) Get(ctx context.Context, addr string) ([]any, error) {
 	ch := c.register(addr)
 	if err := c.Send(addr); err != nil {
 		c.unregister(addr, ch)
@@ -199,7 +199,7 @@ func (c *Client) Get(ctx context.Context, addr string) ([]interface{}, error) {
 }
 
 // GetTimeout is Get with the Client's configured request timeout applied.
-func (c *Client) GetTimeout(addr string) ([]interface{}, error) {
+func (c *Client) GetTimeout(addr string) ([]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
 	defer cancel()
 	return c.Get(ctx, addr)

@@ -18,7 +18,7 @@ import (
 // is what defeats xair-api-python's "whatever arrived most recently, on
 // any address" read (WIRE_PROTOCOL.md §4) but must not defeat Client,
 // which routes each reply to the specific request that asked for it.
-func startFakeMixer(t *testing.T, values map[string]interface{}) *net.UDPConn {
+func startFakeMixer(t *testing.T, values map[string]any) *net.UDPConn {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -43,7 +43,7 @@ func startFakeMixer(t *testing.T, values map[string]interface{}) *net.UDPConn {
 			if !known {
 				continue
 			}
-			go func(peer *net.UDPAddr, address string, v interface{}) {
+			go func(peer *net.UDPAddr, address string, v any) {
 				time.Sleep(time.Duration(len(address)%5) * time.Millisecond)
 				reply := goosc.NewMessage(address, v)
 				data, err := reply.MarshalBinary()
@@ -58,7 +58,7 @@ func startFakeMixer(t *testing.T, values map[string]interface{}) *net.UDPConn {
 }
 
 func TestClientGetRoutesRepliesByAddressConcurrently(t *testing.T) {
-	values := map[string]interface{}{
+	values := map[string]any{
 		"/ch/01/mix/fader": float32(0.75),
 		"/ch/02/mix/fader": float32(0.25),
 		"/ch/03/mix/on":    int32(1),
@@ -79,7 +79,7 @@ func TestClientGetRoutesRepliesByAddressConcurrently(t *testing.T) {
 	errCh := make(chan error, len(values))
 	for addr, want := range values {
 		wg.Add(1)
-		go func(addr string, want interface{}) {
+		go func(addr string, want any) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -101,7 +101,7 @@ func TestClientGetRoutesRepliesByAddressConcurrently(t *testing.T) {
 }
 
 func TestClientGetTimesOutWithoutCorruptingLaterRequests(t *testing.T) {
-	values := map[string]interface{}{
+	values := map[string]any{
 		"/ch/01/mix/fader": float32(0.5),
 	}
 	mixer := startFakeMixer(t, values)

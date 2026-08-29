@@ -2,14 +2,14 @@ package xair
 
 import "fmt"
 
-func argAt(args []interface{}, addr string, i int) (interface{}, error) {
+func argAt(args []any, addr string, i int) (any, error) {
 	if i >= len(args) {
 		return nil, fmt.Errorf("xair: %s: expected at least %d argument(s), got %d", addr, i+1, len(args))
 	}
 	return args[i], nil
 }
 
-func argFloat32(args []interface{}, addr string) (float32, error) {
+func argFloat32(args []any, addr string) (float32, error) {
 	v, err := argAt(args, addr, 0)
 	if err != nil {
 		return 0, err
@@ -24,7 +24,7 @@ func argFloat32(args []interface{}, addr string) (float32, error) {
 	}
 }
 
-func argInt32(args []interface{}, addr string) (int32, error) {
+func argInt32(args []any, addr string) (int32, error) {
 	v, err := argAt(args, addr, 0)
 	if err != nil {
 		return 0, err
@@ -39,7 +39,7 @@ func argInt32(args []interface{}, addr string) (int32, error) {
 	}
 }
 
-func argString(args []interface{}, addr string) (string, error) {
+func argString(args []any, addr string) (string, error) {
 	v, err := argAt(args, addr, 0)
 	if err != nil {
 		return "", err

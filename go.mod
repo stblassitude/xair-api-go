@@ -1,4 +1,4 @@
-module xair-api-go
+module github.com/stblassitude/xair-api-go
 
 go 1.22
 

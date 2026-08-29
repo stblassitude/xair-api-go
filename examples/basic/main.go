@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	xair "xair-api-go"
+	xair "github.com/stblassitude/xair-api-go"
 )
 
 func main() {

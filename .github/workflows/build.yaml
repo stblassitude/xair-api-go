@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, tidy, verify, test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Check go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify module checksums
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+  publish:
+    name: Publish to pkg.go.dev
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # There is no push API for pkg.go.dev: a module version is indexed
+      # once it has been fetched through the Go module proxy at least
+      # once. Asking the proxy for it here (the mechanism documented at
+      # https://go.dev/doc/modules/publishing) makes the just-published
+      # release show up on pkg.go.dev without waiting for an external
+      # `go get` to trigger it organically.
+      - name: Request indexing on pkg.go.dev
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOFLAGS: -mod=mod
+          MODULE: github.com/${{ github.repository }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: go list -m "${MODULE}@${VERSION}"

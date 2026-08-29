@@ -16,7 +16,7 @@ func (n node) Address() string { return n.addr }
 
 func (n node) child(suffix string) node { return node{c: n.c, addr: n.addr + suffix} }
 
-func (n node) getRaw(param string) ([]interface{}, string, error) {
+func (n node) getRaw(param string) ([]any, string, error) {
 	addr := n.addr + "/" + param
 	args, err := n.c.GetTimeout(addr)
 	return args, addr, err

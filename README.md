@@ -8,7 +8,7 @@ The implementation has been facilitated with the use of generative AI.
 
 ## Status
 
-This module (package `xair`, import path `xair-api-go`) implements the
+This module (package `xair`, import path `github.com/stblassitude/xair-api-go`) implements the
 full feature set of `xair-api-python` — connection/kind handling, and the
 Strip/Bus/DCA/FX/FXSend/FxRtn/AuxRtn/LR/Main/Matrix/HeadAmp/Config object
 model with the same value-encoding conventions (see `WIRE_PROTOCOL.md`).
@@ -39,9 +39,10 @@ issues identified there are fixed:
 
 Run `go build ./...`, `go vet ./...`, and `go test ./...` (`-race` is
 clean) from this directory. `examples/basic/main.go` mirrors the
-`xair-api-python` README's usage example. The module path `xair-api-go`
-is a local placeholder — rename it in `go.mod` once this has a real
-repository home.
+`xair-api-python` README's usage example. CI (`.github/workflows/build.yaml`)
+builds, checks that `go.mod`/`go.sum` are tidy, verifies module checksums,
+and tests on every push and pull request, and additionally asks
+pkg.go.dev to index the module on every published GitHub release.
 
 ## xair-api-python's OSC approach vs. Go OSC libraries
 

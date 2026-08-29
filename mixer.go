@@ -165,11 +165,11 @@ func (m *Mixer) validateConnection(ctx context.Context) error {
 // Send is the low-level escape hatch mirroring xair-api-python's
 // mixer.send: it fire-and-forgets addr with the given already
 // OSC-wire-typed argument(s) (WIRE_PROTOCOL.md §6).
-func (m *Mixer) Send(addr string, args ...interface{}) error { return m.Client.Send(addr, args...) }
+func (m *Mixer) Send(addr string, args ...any) error { return m.Client.Send(addr, args...) }
 
 // Query is the low-level escape hatch mirroring xair-api-python's
 // mixer.query: it GETs addr and returns its raw reply arguments.
-func (m *Mixer) Query(addr string) ([]interface{}, error) { return m.Client.GetTimeout(addr) }
+func (m *Mixer) Query(addr string) ([]any, error) { return m.Client.GetTimeout(addr) }
 
 func buildXAir(m *Mixer, k kind) {
 	c := m.Client
