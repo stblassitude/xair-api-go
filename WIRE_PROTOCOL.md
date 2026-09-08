@@ -27,12 +27,34 @@ public references cover the mixer side of the protocol in more depth:
 - **Session/handshake:** none. OSC has no concept of a session. The mixer
   does not need to be told "hello" before accepting commands; the client
   only sends `/xinfo` first as an application-level sanity check (§5).
-- **Keep-alive:** none used by this client. (Real X-Air/X32 firmware also
-  supports an `/xremote` subscription that must be renewed every <10s to
-  keep receiving unsolicited meter/parameter pushes; this client never
-  sends `/xremote` and relies purely on synchronous request/reply. A Go
-  port that wants push updates would need to add this independently — it
-  is not part of the protocol this client speaks today.)
+- **Keep-alive / push subscription:** none in `xair-api-python`, which
+  relies purely on synchronous request/reply. The firmware, however,
+  pushes unsolicited parameter changes to any socket that has subscribed
+  with `/xremote`:
+  - Sending a bare `/xremote` — no arguments, i.e. §3's GET shape —
+    subscribes the *sending* socket's own source address/port. There is
+    no reply, no subscription id, and no unsubscribe message.
+  - The subscription lapses if it is not renewed within <10s, so a
+    subscriber must keep re-sending `/xremote` for as long as it wants
+    pushes, and ends one by simply stopping.
+  - Pushes then arrive on that same socket as ordinary single,
+    non-bundled OSC messages (§2), addressed to the parameter that
+    changed and carrying its new value in the usual encoding (§6) — on
+    the wire they are indistinguishable from a reply to a GET nobody
+    sent.
+
+  This Go client implements it (`subscribe.go`): `Client.Subscribe`
+  sends `/xremote` as soon as the first subscriber registers, re-sends
+  it every `DefaultXRemoteInterval` (8s, comfortably inside the ~10s
+  lifetime) while any subscriber remains, and stops when the last one
+  cancels. Because pushes are shaped exactly like unsolicited replies,
+  they need no separate receive path: whatever the address-routing in §4
+  finds no in-flight request for is offered to the subscribers instead
+  of being dropped. Each is delivered as the raw address plus raw
+  argument, together with that argument decoded through the same §6
+  conversion the corresponding getter uses (dB taper for a fader or send
+  level, lin/log curve, enum table, bool); addresses outside the §8
+  space have no registered conversion and are delivered raw only.
 - **Teardown:** client simply stops its receive loop and closes the socket.
   No disconnect message exists.
 
@@ -320,8 +342,10 @@ docs linked above) that `xair-api-python` never uses, so they are not
 covered by this spec and would need separate protocol research if a Go
 port wants them:
 
-- `/xremote` subscription (and its ~10s renewal requirement) for
-  unsolicited metering/parameter-change push
-- Meter block addresses (`/meters/...`)
+- Meter block addresses (`/meters/...`). The `/xremote` subscription that
+  carries them is implemented (§1) and delivers parameter-change push,
+  but a meter block is a binary blob in a device-specific layout rather
+  than one of the `i`/`f`/`s` parameter messages of §6, so nothing here
+  decodes one.
 - Snapshot/scene/cue OSC commands
 - OSC bundles / timetags

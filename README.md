@@ -11,7 +11,8 @@ The implementation has been facilitated with the use of generative AI.
 This module (package `xair`, import path `github.com/stblassitude/xair-api-go`) implements the
 full feature set of `xair-api-python` — connection/kind handling, and the
 Strip/Bus/DCA/FX/FXSend/FxRtn/AuxRtn/LR/Main/Matrix/HeadAmp/Config object
-model with the same value-encoding conventions (see `WIRE_PROTOCOL.md`).
+model with the same value-encoding conventions (see `WIRE_PROTOCOL.md`) —
+plus `/xremote` push subscription, which the Python client does not have.
 
 It builds on [`hypebeast/go-osc`](https://github.com/hypebeast/go-osc) for
 OSC message encoding/decoding (`osc.Message`, `MarshalBinary`,
@@ -32,6 +33,17 @@ issues identified there are fixed:
   level — see the `Client` doc comment in `transport.go`.
 - **Concurrency-safe**: multiple goroutines can issue `Get`s (to the same
   or different addresses) at once; each gets its own response channel.
+- **Push updates, not just polling.** `Client.Subscribe` (promoted onto
+  `Mixer`) registers for the mixer's unsolicited parameter-change push,
+  sending `/xremote` and renewing it every 8s — under the ~10s the
+  subscription survives without a renewal — for as long as any
+  subscriber is listening, with nothing for the caller to keep alive.
+  Each `Update` carries the OSC address, the raw argument, and that
+  argument decoded into the same units the matching getter returns (dB
+  for a fader or send level, and so on). `xair-api-python` has no
+  equivalent and can only poll. See `subscribe.go`,
+  `examples/subscribe/main.go`, and `WIRE_PROTOCOL.md` §1; binary
+  `/meters/...` blocks remain out of scope (§10).
 - **The `Config.amixenable` getter bug is fixed**: it reads
   `/config/amixenable` (what its own setter writes), not `/config/mute`
   (see `WIRE_PROTOCOL.md` §9 and the doc comment on `Config.AmixEnable`
@@ -39,7 +51,8 @@ issues identified there are fixed:
 
 Run `go build ./...`, `go vet ./...`, and `go test ./...` (`-race` is
 clean) from this directory. `examples/basic/main.go` mirrors the
-`xair-api-python` README's usage example. CI (`.github/workflows/build.yaml`)
+`xair-api-python` README's usage example, and
+`examples/subscribe/main.go` prints push updates as they arrive. CI (`.github/workflows/build.yaml`)
 builds, checks that `go.mod`/`go.sum` are tidy, verifies module checksums,
 and tests on every push and pull request, and additionally asks
 pkg.go.dev to index the module on every published GitHub release.

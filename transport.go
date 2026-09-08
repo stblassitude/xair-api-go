@@ -18,6 +18,12 @@ import (
 // latency to the common case.
 const DefaultRequestTimeout = 500 * time.Millisecond
 
+// DefaultXRemoteInterval is how often a Client with at least one active
+// subscriber re-sends /xremote. The mixer drops a subscription that is
+// not renewed within ~10s (WIRE_PROTOCOL.md §1), so this is deliberately
+// well under that bound.
+const DefaultXRemoteInterval = 8 * time.Second
+
 // Client is a synchronous OSC client for a single mixer connection.
 //
 // It deliberately does not use hypebeast/go-osc's own Client/Server
@@ -42,6 +48,12 @@ type Client struct {
 	mu      sync.Mutex
 	waiters map[string][]chan *goosc.Message
 
+	xremoteInterval time.Duration
+
+	subMu       sync.Mutex
+	subs        []*subscription
+	stopXRemote chan struct{}
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -59,6 +71,13 @@ func WithClientRequestTimeout(d time.Duration) ClientOption {
 	return func(c *Client) { c.requestTimeout = d }
 }
 
+// WithClientXRemoteInterval sets how often /xremote is re-sent while at
+// least one subscriber is registered. Defaults to DefaultXRemoteInterval;
+// values of 10s or more will let the subscription lapse between renewals.
+func WithClientXRemoteInterval(d time.Duration) ClientOption {
+	return func(c *Client) { c.xremoteInterval = d }
+}
+
 // NewClient opens a UDP socket connected to ip:port and starts listening
 // for replies from it. Call Close when done.
 func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
@@ -72,13 +91,14 @@ func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
 	}
 
 	c := &Client{
-		conn:           conn,
-		ip:             ip,
-		port:           port,
-		logger:         slog.Default(),
-		requestTimeout: DefaultRequestTimeout,
-		waiters:        make(map[string][]chan *goosc.Message),
-		done:           make(chan struct{}),
+		conn:            conn,
+		ip:              ip,
+		port:            port,
+		logger:          slog.Default(),
+		requestTimeout:  DefaultRequestTimeout,
+		xremoteInterval: DefaultXRemoteInterval,
+		waiters:         make(map[string][]chan *goosc.Message),
+		done:            make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -88,9 +108,12 @@ func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
-// Close stops the receive loop and closes the underlying socket.
+// Close stops the receive loop, stops any /xremote renewal, closes every
+// subscriber channel handed out by Subscribe, and closes the underlying
+// socket.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() { close(c.done) })
+	c.closeSubscriptions()
 	return c.conn.Close()
 }
 
@@ -137,10 +160,16 @@ func (c *Client) dispatch(msg *goosc.Message) {
 
 	if next != nil {
 		next <- msg
+		return
 	}
-	// An unmatched reply (nobody currently waiting on this address) is
-	// dropped rather than clobbering some unrelated in-flight request's
-	// result, unlike xair-api-python's single shared response field.
+	// Nobody is waiting on this address, so this is not a reply to any
+	// in-flight request: it is either an unsolicited push from an
+	// /xremote subscription (WIRE_PROTOCOL.md §1) or a late reply whose
+	// Get has already timed out. Offer it to the push subscribers; with
+	// none registered, publish drops it rather than clobbering some
+	// unrelated in-flight request's result, unlike xair-api-python's
+	// single shared response field.
+	c.publish(msg)
 }
 
 func (c *Client) register(addr string) chan *goosc.Message {

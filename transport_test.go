@@ -20,10 +20,31 @@ import (
 // which routes each reply to the specific request that asked for it.
 func startFakeMixer(t *testing.T, values map[string]any) *net.UDPConn {
 	t.Helper()
+	return startPushMixer(t, values).conn
+}
+
+// pushMixer is that same fake mixer plus the half of the protocol
+// Subscribe needs (WIRE_PROTOCOL.md §1): it records every /xremote it
+// receives, and can send unsolicited messages back to the socket that
+// subscribed, which is exactly how real firmware pushes parameter
+// changes.
+type pushMixer struct {
+	conn    *net.UDPConn
+	xremote chan time.Time
+
+	mu   sync.Mutex
+	peer *net.UDPAddr
+}
+
+func startPushMixer(t *testing.T, values map[string]any) *pushMixer {
+	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	m := &pushMixer{conn: conn, xremote: make(chan time.Time, 64)}
+	t.Cleanup(func() { conn.Close() })
+
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -39,6 +60,21 @@ func startFakeMixer(t *testing.T, values map[string]any) *net.UDPConn {
 			if !ok {
 				continue
 			}
+
+			// Real firmware pushes to the source address/port of the
+			// /xremote it received; remember it the same way.
+			m.mu.Lock()
+			m.peer = addr
+			m.mu.Unlock()
+
+			if msg.Address == XRemoteAddress {
+				select {
+				case m.xremote <- time.Now():
+				default:
+				}
+				continue
+			}
+
 			val, known := values[msg.Address]
 			if !known {
 				continue
@@ -54,7 +90,41 @@ func startFakeMixer(t *testing.T, values map[string]any) *net.UDPConn {
 			}(addr, msg.Address, val)
 		}
 	}()
-	return conn
+	return m
+}
+
+func (m *pushMixer) port() int { return m.conn.LocalAddr().(*net.UDPAddr).Port }
+
+// push sends an unsolicited message to the client that last talked to
+// this mixer, as the firmware does for a subscribed socket.
+func (m *pushMixer) push(t *testing.T, addr string, args ...any) {
+	t.Helper()
+	m.mu.Lock()
+	peer := m.peer
+	m.mu.Unlock()
+	if peer == nil {
+		t.Fatal("fake mixer has not seen any traffic from a client yet")
+	}
+	data, err := goosc.NewMessage(addr, args...).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.conn.WriteToUDP(data, peer); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitXRemote returns the arrival time of the next /xremote, failing the
+// test if none arrives in time.
+func (m *pushMixer) waitXRemote(t *testing.T, timeout time.Duration) time.Time {
+	t.Helper()
+	select {
+	case ts := <-m.xremote:
+		return ts
+	case <-time.After(timeout):
+		t.Fatalf("no /xremote received within %v", timeout)
+		return time.Time{}
+	}
 }
 
 func TestClientGetRoutesRepliesByAddressConcurrently(t *testing.T) {

@@ -50,6 +50,9 @@ func (k kind) defaultPort() int {
 // relevant to that kind's family are populated: LR and FXSend for the
 // X-Air/MR family; MainStereo, MainMono, and Matrix for X32
 // (WIRE_PROTOCOL.md §8).
+//
+// The embedded Client also promotes Subscribe, for consuming the mixer's
+// unsolicited parameter-change pushes instead of polling.
 type Mixer struct {
 	*Client
 	KindID KindID
@@ -71,10 +74,11 @@ type Mixer struct {
 }
 
 type connectOptions struct {
-	port           int
-	requestTimeout time.Duration
-	connectTimeout time.Duration
-	logger         *slog.Logger
+	port            int
+	requestTimeout  time.Duration
+	connectTimeout  time.Duration
+	xremoteInterval time.Duration
+	logger          *slog.Logger
 }
 
 // Option configures Connect.
@@ -96,6 +100,13 @@ func WithConnectTimeout(d time.Duration) Option {
 	return func(o *connectOptions) { o.connectTimeout = d }
 }
 
+// WithXRemoteInterval overrides how often /xremote is re-sent while the
+// mixer has at least one Subscribe caller (default
+// DefaultXRemoteInterval).
+func WithXRemoteInterval(d time.Duration) Option {
+	return func(o *connectOptions) { o.xremoteInterval = d }
+}
+
 // WithLogger overrides the logger used for warnings (default
 // slog.Default()).
 func WithLogger(l *slog.Logger) Option { return func(o *connectOptions) { o.logger = l } }
@@ -110,16 +121,20 @@ func Connect(ctx context.Context, kindID KindID, ip string, opts ...Option) (*Mi
 	}
 
 	o := connectOptions{
-		port:           k.defaultPort(),
-		requestTimeout: DefaultRequestTimeout,
-		connectTimeout: 2 * time.Second,
-		logger:         slog.Default(),
+		port:            k.defaultPort(),
+		requestTimeout:  DefaultRequestTimeout,
+		connectTimeout:  2 * time.Second,
+		xremoteInterval: DefaultXRemoteInterval,
+		logger:          slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(&o)
 	}
 
-	c, err := NewClient(ip, o.port, WithClientRequestTimeout(o.requestTimeout), WithClientLogger(o.logger))
+	c, err := NewClient(ip, o.port,
+		WithClientRequestTimeout(o.requestTimeout),
+		WithClientXRemoteInterval(o.xremoteInterval),
+		WithClientLogger(o.logger))
 	if err != nil {
 		return nil, err
 	}
