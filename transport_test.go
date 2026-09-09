@@ -24,16 +24,23 @@ func startFakeMixer(t *testing.T, values map[string]any) *net.UDPConn {
 }
 
 // pushMixer is that same fake mixer plus the half of the protocol
-// Subscribe needs (WIRE_PROTOCOL.md §1): it records every /xremote it
-// receives, and can send unsolicited messages back to the socket that
-// subscribed, which is exactly how real firmware pushes parameter
-// changes.
+// Subscribe and SubscribeMeters need (WIRE_PROTOCOL.md §§1, 1a): it
+// records every /xremote and /meters request it receives, and can send
+// unsolicited messages back to the socket that subscribed, which is
+// exactly how real firmware pushes parameter changes and meter blocks.
 type pushMixer struct {
 	conn    *net.UDPConn
 	xremote chan time.Time
+	meters  chan meterRequest
 
 	mu   sync.Mutex
 	peer *net.UDPAddr
+}
+
+// meterRequest is one /meters command as the fake mixer saw it.
+type meterRequest struct {
+	args []any
+	at   time.Time
 }
 
 func startPushMixer(t *testing.T, values map[string]any) *pushMixer {
@@ -42,7 +49,11 @@ func startPushMixer(t *testing.T, values map[string]any) *pushMixer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &pushMixer{conn: conn, xremote: make(chan time.Time, 64)}
+	m := &pushMixer{
+		conn:    conn,
+		xremote: make(chan time.Time, 64),
+		meters:  make(chan meterRequest, 64),
+	}
 	t.Cleanup(func() { conn.Close() })
 
 	go func() {
@@ -70,6 +81,14 @@ func startPushMixer(t *testing.T, values map[string]any) *pushMixer {
 			if msg.Address == XRemoteAddress {
 				select {
 				case m.xremote <- time.Now():
+				default:
+				}
+				continue
+			}
+
+			if msg.Address == MetersAddress {
+				select {
+				case m.meters <- meterRequest{args: msg.Arguments, at: time.Now()}:
 				default:
 				}
 				continue
@@ -124,6 +143,19 @@ func (m *pushMixer) waitXRemote(t *testing.T, timeout time.Duration) time.Time {
 	case <-time.After(timeout):
 		t.Fatalf("no /xremote received within %v", timeout)
 		return time.Time{}
+	}
+}
+
+// waitMeters returns the next /meters request, failing the test if none
+// arrives in time.
+func (m *pushMixer) waitMeters(t *testing.T, timeout time.Duration) meterRequest {
+	t.Helper()
+	select {
+	case r := <-m.meters:
+		return r
+	case <-time.After(timeout):
+		t.Fatalf("no /meters request received within %v", timeout)
+		return meterRequest{}
 	}
 }
 

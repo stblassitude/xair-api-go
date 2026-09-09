@@ -70,8 +70,9 @@ type subscription struct {
 // idempotent.
 //
 // Only parameter-change pushes are delivered. Binary /meters/... blocks
-// have a different wire format and are not implemented
-// (WIRE_PROTOCOL.md §10).
+// are a separate subscription with a wire format of its own
+// (WIRE_PROTOCOL.md §1a); they go to their own subscribers, never here.
+// See Client.SubscribeMeters and Mixer.SubscribeLevels.
 func (c *Client) Subscribe() (<-chan *Update, func()) {
 	s := &subscription{ch: make(chan *Update, updateBuffer)}
 

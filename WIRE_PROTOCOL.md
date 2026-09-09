@@ -55,8 +55,110 @@ public references cover the mixer side of the protocol in more depth:
   conversion the corresponding getter uses (dB taper for a fader or send
   level, lin/log curve, enum table, bool); addresses outside the §8
   space have no registered conversion and are delivered raw only.
+- **Meter subscription:** see §1a.
 - **Teardown:** client simply stops its receive loop and closes the socket.
   No disconnect message exists.
+
+### 1a. Meter blocks (`/meters`)
+
+Level metering is a second, separate subscription, unrelated to
+`/xremote` and unused by `xair-api-python`. It streams *binary blobs*
+rather than the `i`/`f`/`s` parameter messages of §6, and the two mixer
+families encode those blobs differently, so it is specified here in
+full. Sources: the meter chapters of the two public references linked at
+the top of this file, plus Patrick-Gilles Maillot's X-Air bank table
+posted at <https://behringer.world/viewtopic.php?t=1545> (the X-Air
+banks are not in either PDF) and his `XAir_Command.c` blob reader, which
+is where the X-Air/X32 encoding split is visible in code.
+
+- **Subscribing:** send `/meters` with a string naming the bank wanted,
+  optionally that bank's own selector ints, and a trailing int time
+  factor:
+
+  ```
+  /meters ,s     "/meters/1"                    -- bank 1, default rate
+  /meters ,si    "/meters/1"  2                 -- bank 1, every 2 cycles
+  /meters ,sii   "/meters/0"  8  2              -- bank 0 of channel 8
+  /meters ,siii  "/meters/5"  3  1  40          -- X32 bank 5, two selectors
+  ```
+
+  As with `/xremote` the *sending* socket's source address/port is what
+  gets subscribed; there is no reply to the request itself and no
+  subscription id. Several banks may be subscribed to at once.
+- **Rate:** the mixer's meter cycle is 50 ms. The time factor is the
+  number of those cycles between two blocks — an integer in `1`–`99`,
+  anything outside that range meaning `1` — so the achievable rates are
+  20 Hz / `tf`: `1` → 20 Hz, `2` → 10 Hz, `20` → 1 Hz.
+- **Lifetime:** exactly as for `/xremote`, a meter subscription lapses
+  ~10s after the last request for it, and is kept alive by re-sending
+  the identical `/meters` command. (X32 firmware also has
+  `/subscribe`, `/batchsubscribe`, `/renew` and `/unsubscribe`, which
+  alias a subscription to a name and can renew or end it by that name;
+  the X-Air family does not document them, and re-sending `/meters`
+  works on both.)
+- **Block format:** blocks arrive addressed to the bank itself —
+  `/meters/1`, not `/meters` — carrying a single OSC blob argument (§2's
+  "no blobs" note describes `xair-api-python`'s usage, not the
+  firmware's). Inside the blob:
+
+  ```
+  /meters/N ,b <int32 be: blob byte length> <int32 le: value count> <value> ...
+  ```
+
+  The big-endian length is OSC's own blob header. Everything after it is
+  little-endian, and the count is a count of *values*, not of bytes.
+- **Value encoding — this is where the families differ:**
+  - **X-Air / MR:** each value is a signed 16-bit int in units of
+    1/256 dB, i.e. `dB = int16 / 256`, over a range of `[-128.0, 0.0]`
+    dBFS. `0x8000` (`-128.0`) is silence. Reading these as floats is the
+    classic bug — it yields values like `-1e29`.
+  - **X32 / M32:** each value is a 32-bit float holding a *linear* level,
+    `1.0` being digital full scale, with internal headroom allowing up to
+    `8.0` (+18 dBFS).
+- **Bank contents:** each bank is a fixed-order list of levels, and the
+  lists differ per family. X-Air / MR:
+
+  | Bank | Values | Contents, in order |
+  |---|---|---|
+  | 0 | 8 | pre L, pre R, gate GR, comp GR, post L, post R, gate key, comp key — for the one channel given as the bank's argument |
+  | 1 | 40 | 16× channel pre; aux pre L/R; fx1–fx4 pre L/R; bus1–bus6 pre; fxsend1–fxsend4 pre; main post L/R; monitor L/R |
+  | 2 | 36 | 16× preamp in; 2× aux in; 18× USB in |
+  | 3 | 56 | 4× (fx in L, fx in R, 10× fx state, fx out L, fx out R) |
+  | 4 | 100 | RTA levels |
+  | 5 | 44 | 6× aux out; main out L/R; 16× ultranet out; 18× USB out; phones L/R |
+  | 6 | 39 | 16× channel gate GR; 16× channel comp GR; 6× bus comp GR; main comp GR |
+  | 7 | 16 | 16× channel automix GR |
+  | 8 | 4 | 4× DCA (channel post) |
+  | 9 | 4 | recorder in L/R, recorder out L/R |
+
+  X32 / M32 (only the banks this client maps; the reference PDF lists
+  0–16):
+
+  | Bank | Values | Contents, in order |
+  |---|---|---|
+  | 0 | 70 | 32× input channel; 8× aux return; 4×2 stereo fx return; 16× bus master; 6× matrix |
+  | 2 | 49 | 16× bus master; 6× matrix; main L/R; mono M/C; then the same 24 as dynamics gain reduction |
+  | 5 | 27 | 16 channel meters (block selected by the first argument); 8 group meters (block selected by the second: `0` = DCA 1–8); main L/R; mono M/C |
+  | 9 | 32 | per FX slot 1–8: send L, send R, return L, return R |
+  | 11 | 5 | monitor L, monitor R, talk A/B, threshold/GR, osc tone |
+
+  Note the X-Air table is the XR18/MR18 shape; the smaller models run the
+  same firmware and report the same block widths, with the positions they
+  have no hardware for reading silence.
+
+This Go client implements the whole of the above (`meters.go`,
+`levels.go`). `Client.SubscribeMeters` takes a bank, its arguments and a
+desired interval, converts that interval to a time factor (rounding up,
+so the stream is never faster than asked for), sends the request at once
+and re-sends it every `DefaultMeterRenewInterval` (5s) while any
+subscriber to that bank remains. Blocks are routed by their own address,
+ahead of the §1 push subscribers, and decoded to dBFS — the X32's linear
+floats converted with `20·log10`, both families floored at
+`MeterSilenceDB` — so that a value means the same thing on either
+family. `Mixer.SubscribeLevels` sits on top and resolves named meters
+(`StripMeter(3)`, `MainMeter(1)`, ...) against the tables above for the
+connected kind, subscribing to whichever banks they need and emitting one
+frame of levels per update of the bank the first meter named lives in.
 
 ## 2. OSC packet format
 
@@ -342,10 +444,16 @@ docs linked above) that `xair-api-python` never uses, so they are not
 covered by this spec and would need separate protocol research if a Go
 port wants them:
 
-- Meter block addresses (`/meters/...`). The `/xremote` subscription that
-  carries them is implemented (§1) and delivers parameter-change push,
-  but a meter block is a binary blob in a device-specific layout rather
-  than one of the `i`/`f`/`s` parameter messages of §6, so nothing here
-  decodes one.
+- Meter banks whose values are not plain levels: the RTA bank, the
+  gain-reduction and automix banks, and the X32's `/meters/15` and
+  `/meters/16`, whose blobs pack two shorts into each 32-bit slot on
+  scales of their own. Meter *levels* are implemented (§1a) and these
+  banks can still be subscribed to — `MeterUpdate.Blob` hands back the
+  raw bytes — but nothing here interprets their contents.
+- The X32-only `/subscribe`, `/formatsubscribe`, `/batchsubscribe`,
+  `/renew` and `/unsubscribe` commands (§1a): named subscriptions to
+  arbitrary parameters, or to meters under a caller-chosen alias. The
+  `/xremote` and `/meters` subscriptions this client uses cover the same
+  ground on both families.
 - Snapshot/scene/cue OSC commands
 - OSC bundles / timetags

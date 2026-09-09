@@ -46,13 +46,25 @@ func (k kind) defaultPort() int {
 	return 10024
 }
 
+// meterEncoding is how this family encodes the values inside a meter
+// block: the X32 sends linear floats, the X-Air/MR family 1/256 dB
+// shorts (WIRE_PROTOCOL.md §1a).
+func (k kind) meterEncoding() MeterEncoding {
+	if k.id == KindX32 {
+		return MeterEncodingFloat32Linear
+	}
+	return MeterEncodingInt16DB
+}
+
 // Mixer is a connected mixer of a specific KindID. Only the fields
 // relevant to that kind's family are populated: LR and FXSend for the
 // X-Air/MR family; MainStereo, MainMono, and Matrix for X32
 // (WIRE_PROTOCOL.md §8).
 //
 // The embedded Client also promotes Subscribe, for consuming the mixer's
-// unsolicited parameter-change pushes instead of polling.
+// unsolicited parameter-change pushes instead of polling, and
+// SubscribeMeters; SubscribeLevels builds on the latter to deliver named
+// level meters for this specific kind.
 type Mixer struct {
 	*Client
 	KindID KindID
@@ -74,11 +86,12 @@ type Mixer struct {
 }
 
 type connectOptions struct {
-	port            int
-	requestTimeout  time.Duration
-	connectTimeout  time.Duration
-	xremoteInterval time.Duration
-	logger          *slog.Logger
+	port               int
+	requestTimeout     time.Duration
+	connectTimeout     time.Duration
+	xremoteInterval    time.Duration
+	meterRenewInterval time.Duration
+	logger             *slog.Logger
 }
 
 // Option configures Connect.
@@ -107,6 +120,13 @@ func WithXRemoteInterval(d time.Duration) Option {
 	return func(o *connectOptions) { o.xremoteInterval = d }
 }
 
+// WithMeterRenewInterval overrides how often a meter bank's /meters
+// request is re-sent while the mixer has at least one SubscribeMeters or
+// SubscribeLevels caller for it (default DefaultMeterRenewInterval).
+func WithMeterRenewInterval(d time.Duration) Option {
+	return func(o *connectOptions) { o.meterRenewInterval = d }
+}
+
 // WithLogger overrides the logger used for warnings (default
 // slog.Default()).
 func WithLogger(l *slog.Logger) Option { return func(o *connectOptions) { o.logger = l } }
@@ -121,11 +141,12 @@ func Connect(ctx context.Context, kindID KindID, ip string, opts ...Option) (*Mi
 	}
 
 	o := connectOptions{
-		port:            k.defaultPort(),
-		requestTimeout:  DefaultRequestTimeout,
-		connectTimeout:  2 * time.Second,
-		xremoteInterval: DefaultXRemoteInterval,
-		logger:          slog.Default(),
+		port:               k.defaultPort(),
+		requestTimeout:     DefaultRequestTimeout,
+		connectTimeout:     2 * time.Second,
+		xremoteInterval:    DefaultXRemoteInterval,
+		meterRenewInterval: DefaultMeterRenewInterval,
+		logger:             slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -134,6 +155,8 @@ func Connect(ctx context.Context, kindID KindID, ip string, opts ...Option) (*Mi
 	c, err := NewClient(ip, o.port,
 		WithClientRequestTimeout(o.requestTimeout),
 		WithClientXRemoteInterval(o.xremoteInterval),
+		WithClientMeterRenewInterval(o.meterRenewInterval),
+		WithClientMeterEncoding(k.meterEncoding()),
 		WithClientLogger(o.logger))
 	if err != nil {
 		return nil, err

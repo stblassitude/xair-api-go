@@ -4,7 +4,8 @@
 //
 // Beyond that feature set, Client.Subscribe consumes the mixer's
 // /xremote parameter-change push, so callers can react to changes made
-// elsewhere instead of polling for them.
+// elsewhere instead of polling for them, and Mixer.SubscribeLevels
+// consumes its /meters blocks, so they can display live signal levels.
 //
 // See WIRE_PROTOCOL.md for the wire protocol this package implements, and
 // the "xair-api-python's OSC approach vs. Go OSC libraries" section of

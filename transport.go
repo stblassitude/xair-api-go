@@ -54,6 +54,12 @@ type Client struct {
 	subs        []*subscription
 	stopXRemote chan struct{}
 
+	meterEncoding      MeterEncoding
+	meterRenewInterval time.Duration
+
+	meterMu     sync.Mutex
+	meterGroups map[string]*meterGroup
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -78,6 +84,23 @@ func WithClientXRemoteInterval(d time.Duration) ClientOption {
 	return func(c *Client) { c.xremoteInterval = d }
 }
 
+// WithClientMeterRenewInterval sets how often a meter bank's /meters
+// request is re-sent while at least one subscriber to it is registered.
+// Defaults to DefaultMeterRenewInterval; values of 10s or more will let
+// the subscription lapse between renewals.
+func WithClientMeterRenewInterval(d time.Duration) ClientOption {
+	return func(c *Client) { c.meterRenewInterval = d }
+}
+
+// WithClientMeterEncoding sets how the values inside a meter block are
+// encoded, which differs by mixer family (WIRE_PROTOCOL.md §1a).
+// Defaults to MeterEncodingInt16DB, the X-Air/MR encoding, matching this
+// constructor's X-Air-oriented defaults; Connect sets it from the
+// KindID instead.
+func WithClientMeterEncoding(e MeterEncoding) ClientOption {
+	return func(c *Client) { c.meterEncoding = e }
+}
+
 // NewClient opens a UDP socket connected to ip:port and starts listening
 // for replies from it. Call Close when done.
 func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
@@ -99,6 +122,10 @@ func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
 		xremoteInterval: DefaultXRemoteInterval,
 		waiters:         make(map[string][]chan *goosc.Message),
 		done:            make(chan struct{}),
+
+		meterEncoding:      MeterEncodingInt16DB,
+		meterRenewInterval: DefaultMeterRenewInterval,
+		meterGroups:        make(map[string]*meterGroup),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -108,12 +135,13 @@ func NewClient(ip string, port int, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
-// Close stops the receive loop, stops any /xremote renewal, closes every
-// subscriber channel handed out by Subscribe, and closes the underlying
-// socket.
+// Close stops the receive loop, stops any /xremote or /meters renewal,
+// closes every subscriber channel handed out by Subscribe and
+// SubscribeMeters, and closes the underlying socket.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() { close(c.done) })
 	c.closeSubscriptions()
+	c.closeMeterSubscriptions()
 	return c.conn.Close()
 }
 
@@ -163,12 +191,18 @@ func (c *Client) dispatch(msg *goosc.Message) {
 		return
 	}
 	// Nobody is waiting on this address, so this is not a reply to any
-	// in-flight request: it is either an unsolicited push from an
-	// /xremote subscription (WIRE_PROTOCOL.md §1) or a late reply whose
-	// Get has already timed out. Offer it to the push subscribers; with
-	// none registered, publish drops it rather than clobbering some
-	// unrelated in-flight request's result, unlike xair-api-python's
-	// single shared response field.
+	// in-flight request: it is a binary meter block from a /meters
+	// subscription (WIRE_PROTOCOL.md §1a), an unsolicited push from an
+	// /xremote subscription (§1), or a late reply whose Get has already
+	// timed out. Meter blocks go to the subscribers of their own bank
+	// and no further, since their blob argument means nothing to a
+	// parameter-change consumer; everything else is offered to the push
+	// subscribers. With nobody registered, both paths drop the message
+	// rather than clobbering some unrelated in-flight request's result,
+	// unlike xair-api-python's single shared response field.
+	if c.dispatchMeter(msg) {
+		return
+	}
 	c.publish(msg)
 }
 

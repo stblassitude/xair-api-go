@@ -12,7 +12,8 @@ This module (package `xair`, import path `github.com/stblassitude/xair-api-go`) 
 full feature set of `xair-api-python` — connection/kind handling, and the
 Strip/Bus/DCA/FX/FXSend/FxRtn/AuxRtn/LR/Main/Matrix/HeadAmp/Config object
 model with the same value-encoding conventions (see `WIRE_PROTOCOL.md`) —
-plus `/xremote` push subscription, which the Python client does not have.
+plus `/xremote` push subscription and `/meters` level metering, neither
+of which the Python client has.
 
 It builds on [`hypebeast/go-osc`](https://github.com/hypebeast/go-osc) for
 OSC message encoding/decoding (`osc.Message`, `MarshalBinary`,
@@ -42,8 +43,17 @@ issues identified there are fixed:
   argument decoded into the same units the matching getter returns (dB
   for a fader or send level, and so on). `xair-api-python` has no
   equivalent and can only poll. See `subscribe.go`,
-  `examples/subscribe/main.go`, and `WIRE_PROTOCOL.md` §1; binary
-  `/meters/...` blocks remain out of scope (§10).
+  `examples/subscribe/main.go`, and `WIRE_PROTOCOL.md` §1.
+- **Live level metering.** `Mixer.SubscribeLevels` takes a list of named
+  meters — `xair.StripMeter(3)`, `xair.MainMeter(1)`, and so on — and
+  delivers their levels in dBFS as the mixer streams them, at a rate you
+  choose (`xair.WithMeterInterval`, default 10 Hz). It works out which
+  `/meters` bank each one lives in for the connected kind, subscribes to
+  the banks it needs, and renews them every 5s so the stream does not
+  lapse. `Client.SubscribeMeters` is the layer below, handing back a
+  whole bank. Both families are covered, including the X-Air/X32 split
+  in how a meter blob encodes its values. See `meters.go`, `levels.go`,
+  `examples/meters/main.go`, and `WIRE_PROTOCOL.md` §1a.
 - **The `Config.amixenable` getter bug is fixed**: it reads
   `/config/amixenable` (what its own setter writes), not `/config/mute`
   (see `WIRE_PROTOCOL.md` §9 and the doc comment on `Config.AmixEnable`
@@ -51,8 +61,9 @@ issues identified there are fixed:
 
 Run `go build ./...`, `go vet ./...`, and `go test ./...` (`-race` is
 clean) from this directory. `examples/basic/main.go` mirrors the
-`xair-api-python` README's usage example, and
-`examples/subscribe/main.go` prints push updates as they arrive. CI (`.github/workflows/build.yaml`)
+`xair-api-python` README's usage example,
+`examples/subscribe/main.go` prints push updates as they arrive, and
+`examples/meters/main.go` prints live channel levels. CI (`.github/workflows/build.yaml`)
 builds, checks that `go.mod`/`go.sum` are tidy, verifies module checksums,
 and tests on every push and pull request, and additionally asks
 pkg.go.dev to index the module on every published GitHub release.

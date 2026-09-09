@@ -63,8 +63,9 @@ func TestDecodePush(t *testing.T) {
 		{"/ch/01/insert/sel", int32(9), int32(9)},
 
 		// Not decodable: an address outside §8's space, a value of the
-		// wrong type, an out-of-range enum index, and the binary meter
-		// blocks that remain out of scope (§10).
+		// wrong type, an out-of-range enum index, and a meter block,
+		// which never reaches this path at all — it is routed to its own
+		// subscribers (§1a) before the push decoders see it.
 		{"/xinfo", "10.0.0.1", nil},
 		{"/some/unknown/param", float32(0.5), nil},
 		{"/ch/01/mix/fader", "loud", nil},
